@@ -491,7 +491,7 @@ class VLLMModel(SimpleResponsesAPIModel):
             # `prompt_str`) can be built with different chat template settings than
             # the actual generation request.
             tokenize_body_dict = dict()
-            for key in ("model", "messages", "tools", "chat_template_kwargs"):
+            for key in ("model", "messages", "tools", "chat_template_kwargs", "mm_processor_kwargs"):
                 if key in body_dict:
                     tokenize_body_dict[key] = body_dict[key]
 
