@@ -147,6 +147,72 @@ class NeMoGymResponseOutputRefusal(BaseModel):
 NeMoGymContent: TypeAlias = Union[NeMoGymResponseOutputText, NeMoGymResponseOutputRefusal]
 
 
+class NeMoGymInputTextPart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    type: Literal["input_text"] = "input_text"
+
+
+class NeMoGymInputImagePart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    image_url: Union[str, Dict[str, Any]]
+    type: Literal["input_image"] = "input_image"
+    detail: Optional[str] = None
+
+
+class NeMoGymImageUrlPart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    image_url: Union[str, Dict[str, Any]]
+    type: Literal["image_url"] = "image_url"
+    detail: Optional[str] = None
+
+
+class NeMoGymInputVideoPart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["input_video"] = "input_video"
+    video_url: Optional[Union[str, Dict[str, Any]]] = None
+    video: Optional[Union[str, Dict[str, Any]]] = None
+
+
+class NeMoGymVideoUrlPart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    video_url: Union[str, Dict[str, Any]]
+    type: Literal["video_url"] = "video_url"
+
+
+class NeMoGymInputAudioPart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["input_audio"] = "input_audio"
+    input_audio: Optional[Dict[str, Any]] = None
+    audio_url: Optional[Union[str, Dict[str, Any]]] = None
+    audio: Optional[Union[str, Dict[str, Any]]] = None
+
+
+class NeMoGymAudioUrlPart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    audio_url: Union[str, Dict[str, Any]]
+    type: Literal["audio_url"] = "audio_url"
+
+
+NeMoGymOmniInputContentPart: TypeAlias = Union[
+    NeMoGymInputTextPart,
+    NeMoGymInputImagePart,
+    NeMoGymImageUrlPart,
+    NeMoGymInputVideoPart,
+    NeMoGymVideoUrlPart,
+    NeMoGymInputAudioPart,
+    NeMoGymAudioUrlPart,
+]
+NeMoGymOmniInputContentList: TypeAlias = List[NeMoGymOmniInputContentPart]
+
+
 class NeMoGymResponseOutputMessage(BaseModel):
     id: str
     # Override the Iterable to avoid lazy iterators in Pydantic validation.
@@ -157,13 +223,13 @@ class NeMoGymResponseOutputMessage(BaseModel):
 
 
 class NeMoGymEasyInputMessage(BaseModel):
-    content: Union[str, ResponseInputMessageContentListParam]
+    content: Union[str, ResponseInputMessageContentListParam, NeMoGymOmniInputContentList]
     role: Literal["user", "assistant", "system", "developer"]
     type: Literal["message"] = "message"
 
 
 class NeMoGymMessage(BaseModel):
-    content: ResponseInputMessageContentListParam
+    content: Union[ResponseInputMessageContentListParam, NeMoGymOmniInputContentList]
     role: Literal["user", "system", "developer"]
     status: Literal["in_progress", "completed", "incomplete"] = "completed"
     type: Literal["message"] = "message"
@@ -353,9 +419,36 @@ class NeMoGymChatCompletionContentPartImageParam(ChatCompletionContentPartImageP
     pass
 
 
+class NeMoGymChatCompletionContentPartVideoUrlParam(TypedDict, total=False):
+    video_url: Required[Union[str, Dict[str, Any]]]
+    type: Required[Literal["video_url"]]
+
+
+class NeMoGymChatCompletionContentPartInputVideoParam(TypedDict, total=False):
+    video_url: Union[str, Dict[str, Any]]
+    video: Union[str, Dict[str, Any]]
+    type: Required[Literal["input_video"]]
+
+
+class NeMoGymChatCompletionContentPartAudioUrlParam(TypedDict, total=False):
+    audio_url: Required[Union[str, Dict[str, Any]]]
+    type: Required[Literal["audio_url"]]
+
+
+class NeMoGymChatCompletionContentPartInputAudioParam(TypedDict, total=False):
+    input_audio: Dict[str, Any]
+    audio_url: Union[str, Dict[str, Any]]
+    audio: Union[str, Dict[str, Any]]
+    type: Required[Literal["input_audio"]]
+
+
 NeMoGymChatCompletionContentPartParam = Union[
     NeMoGymChatCompletionContentPartTextParam,
     NeMoGymChatCompletionContentPartImageParam,
+    NeMoGymChatCompletionContentPartVideoUrlParam,
+    NeMoGymChatCompletionContentPartInputVideoParam,
+    NeMoGymChatCompletionContentPartAudioUrlParam,
+    NeMoGymChatCompletionContentPartInputAudioParam,
 ]
 
 

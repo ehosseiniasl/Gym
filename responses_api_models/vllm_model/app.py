@@ -709,6 +709,47 @@ class VLLMConverter(BaseModel):
                         converted_parts.append(
                             {"type": "image_url", "image_url": {"url": image_url, "detail": detail}}
                         )
+                    case "image_url":
+                        image_url = part_param.get("image_url", "")
+                        if isinstance(image_url, dict):
+                            image_url = image_url.get("url", "")
+                        detail = part_param.get("detail", "auto")
+                        converted_parts.append(
+                            {"type": "image_url", "image_url": {"url": image_url, "detail": detail}}
+                        )
+                    case "input_video":
+                        video_url = part_param.get("video_url", part_param.get("video", ""))
+                        if isinstance(video_url, dict):
+                            video_url = video_url.get("url", "")
+                        converted_parts.append(
+                            {"type": "video_url", "video_url": {"url": video_url}}
+                        )
+                    case "video_url":
+                        video_url = part_param.get("video_url", "")
+                        if isinstance(video_url, dict):
+                            video_url = video_url.get("url", "")
+                        converted_parts.append(
+                            {"type": "video_url", "video_url": {"url": video_url}}
+                        )
+                    case "input_audio":
+                        if "input_audio" in part_param:
+                            converted_parts.append(
+                                {"type": "input_audio", "input_audio": part_param["input_audio"]}
+                            )
+                        else:
+                            audio_url = part_param.get("audio_url", part_param.get("audio", ""))
+                            if isinstance(audio_url, dict):
+                                audio_url = audio_url.get("url", "")
+                            converted_parts.append(
+                                {"type": "audio_url", "audio_url": {"url": audio_url}}
+                            )
+                    case "audio_url":
+                        audio_url = part_param.get("audio_url", "")
+                        if isinstance(audio_url, dict):
+                            audio_url = audio_url.get("url", "")
+                        converted_parts.append(
+                            {"type": "audio_url", "audio_url": {"url": audio_url}}
+                        )
                     case _:
                         raise NotImplementedError(f"Unsupported part param type: {part_param['type']}")
             content = converted_parts
