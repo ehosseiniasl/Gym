@@ -160,7 +160,7 @@ class VLLMModel(SimpleResponsesAPIModel):
     @staticmethod
     def _get_tokenize_body_dict(body_dict: Dict[str, Any]) -> Dict[str, Any]:
         tokenize_body_dict = {}
-        for key in ("model", "messages", "tools", "chat_template_kwargs"):
+        for key in ("model", "messages", "tools", "chat_template_kwargs", "mm_processor_kwargs"):
             if key in body_dict:
                 tokenize_body_dict[key] = body_dict[key]
         return tokenize_body_dict
