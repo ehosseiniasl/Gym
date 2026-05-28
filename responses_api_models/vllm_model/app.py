@@ -318,8 +318,8 @@ class VLLMModel(SimpleResponsesAPIModel):
             body_dict |= dict(
                 logprobs=True,
                 return_tokens_as_token_ids=True,
-                # For prompt token IDs
-                # prompt_logprobs=0,
+                # For prompt and generation token IDs in modern vLLM.
+                return_token_ids=True,
             )
 
         if self.config.uses_reasoning_parser:
@@ -374,10 +374,7 @@ class VLLMModel(SimpleResponsesAPIModel):
         prompt_token_ids: Optional[List[int]] = None
         vllm_max_model_len: Optional[int] = None
 
-        should_tokenize_prompt = (
-            self.config.return_token_id_information
-            or self.config.max_input_tokens is not None
-        )
+        should_tokenize_prompt = self.config.max_input_tokens is not None
         if should_tokenize_prompt:
             tokenize_response = await self._get_tokenize_response(client, body_dict)
             prompt_token_ids = tokenize_response["tokens"]
@@ -442,10 +439,20 @@ class VLLMModel(SimpleResponsesAPIModel):
                 "context length" in result_content_str or "max_tokens" in result_content_str
             )
             if is_out_of_context_length:
-                res = self._create_empty_chat_completion()
-                res.choices[0].finish_reason = "length"
-                return res
+                if prompt_token_ids is None:
+                    try:
+                        prompt_token_ids = await self._get_prompt_token_ids(client, body_dict)
+                    except Exception:
+                        prompt_token_ids = None
+
+                return self._create_context_length_exceeded_chat_completion(prompt_token_ids)
             else:
+                LOGGER.error(
+                    "vLLM chat-completions request rejected: status=%s body=%s payload_keys=%s",
+                    e.status,
+                    result_content_str,
+                    sorted(body_dict.keys()),
+                )
                 raise e
 
         choice_dict = chat_completion_dict["choices"][0]
@@ -473,15 +480,58 @@ class VLLMModel(SimpleResponsesAPIModel):
             log_probs = (choice_dict.get("logprobs") or {}).get("content") or []
             generation_log_probs = [log_prob["logprob"] for log_prob in log_probs]
 
-            # Looks like `"token_id:151667"` when
-            # return_tokens_as_token_ids=True.
-            generation_token_ids = [
-                log_prob["token"].removeprefix("token_id:")
-                for log_prob in log_probs
-            ]
+            def _token_id_from_logprob_token(token: Any) -> int:
+                if isinstance(token, str) and token.startswith("token_id:"):
+                    return int(token.removeprefix("token_id:"))
+                raise ValueError(
+                    "Cannot recover a token id from logprobs.content token "
+                    f"{token!r}. Expected vLLM return_tokens_as_token_ids=True "
+                    "format like 'token_id:151667'."
+                )
 
-            tokenize_response = await self._get_tokenize_response(client, body_dict)
-            prompt_token_ids = tokenize_response["tokens"]
+            direct_generation_token_ids = choice_dict.get("token_ids")
+            if direct_generation_token_ids is not None:
+                generation_token_ids = [int(token_id) for token_id in direct_generation_token_ids]
+                try:
+                    logprob_token_ids = [
+                        _token_id_from_logprob_token(log_prob["token"])
+                        for log_prob in log_probs
+                    ]
+                except ValueError:
+                    logprob_token_ids = None
+                if logprob_token_ids is not None and logprob_token_ids != generation_token_ids:
+                    mismatch_positions = [
+                        idx
+                        for idx, (direct_token_id, logprob_token_id) in enumerate(
+                            zip(generation_token_ids, logprob_token_ids)
+                        )
+                        if direct_token_id != logprob_token_id
+                    ]
+                    LOGGER.warning(
+                        "vLLM native token_ids differ from logprobs token strings "
+                        "at %d/%d positions; using native token_ids. First mismatches: %s",
+                        len(mismatch_positions),
+                        len(generation_token_ids),
+                        mismatch_positions[:10],
+                    )
+            else:
+                generation_token_ids = [
+                    _token_id_from_logprob_token(log_prob["token"])
+                    for log_prob in log_probs
+                ]
+
+            if len(generation_token_ids) != len(generation_log_probs):
+                raise ValueError(
+                    "vLLM returned mismatched generation token/logprob lengths: "
+                    f"len(generation_token_ids)={len(generation_token_ids)}, "
+                    f"len(generation_log_probs)={len(generation_log_probs)}"
+                )
+
+            native_prompt_token_ids = chat_completion_dict.get("prompt_token_ids")
+            if native_prompt_token_ids is not None:
+                prompt_token_ids = [int(token_id) for token_id in native_prompt_token_ids]
+            elif prompt_token_ids is None:
+                prompt_token_ids = await self._get_prompt_token_ids(client, body_dict)
 
             message_dict = choice_dict["message"]
             message_dict.update(
@@ -493,7 +543,7 @@ class VLLMModel(SimpleResponsesAPIModel):
             )
 
             # Clean the duplicated information
-            choice_dict.pop("logprobs")
+            choice_dict.pop("logprobs", None)
             chat_completion_dict.pop("prompt_token_ids", None)
             choice_dict.pop("token_ids", None)
 
