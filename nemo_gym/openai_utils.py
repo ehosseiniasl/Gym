@@ -101,6 +101,12 @@ class TokenIDLogProbMixin(BaseModel):
     prompt_token_ids: List[int]
     generation_token_ids: List[int]
     generation_log_probs: List[float]
+    generation_token_id_source: Optional[str] = None
+    native_generation_token_ids_count: Optional[int] = None
+    logprob_generation_token_ids_count: Optional[int] = None
+    native_logprob_token_id_mismatch_count: Optional[int] = None
+    native_logprob_token_id_first_mismatches: Optional[List[int]] = None
+    finish_reason: Optional[str] = None
 
 
 class TokenIDLogProbTypedDictMixin(TypedDict):
