@@ -80,7 +80,7 @@ from openai.types.responses.response_usage import ResponseUsage
 from openai.types.shared.chat_model import ChatModel
 from openai.types.shared_params import FunctionDefinition
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from nemo_gym.server_utils import (
     _GLOBAL_AIOHTTP_CLIENT_REQUEST_DEBUG,
@@ -107,12 +107,26 @@ class TokenIDLogProbMixin(BaseModel):
     native_logprob_token_id_mismatch_count: Optional[int] = None
     native_logprob_token_id_first_mismatches: Optional[List[int]] = None
     finish_reason: Optional[str] = None
+    debug_vllm_prefill_generation_log_probs: Optional[List[float]] = None
+    debug_vllm_prefill_generation_logprob_count: Optional[int] = None
+    debug_vllm_prefill_generation_logprob_error_mean: Optional[float] = None
+    debug_vllm_prefill_generation_logprob_error_max: Optional[float] = None
+    debug_vllm_prefill_generation_logprob_status: Optional[str] = None
+    debug_vllm_decode_generation_log_probs: Optional[List[float]] = None
+    debug_vllm_generation_logprob_source: Optional[str] = None
 
 
 class TokenIDLogProbTypedDictMixin(TypedDict):
     prompt_token_ids: List[int]
     generation_token_ids: List[int]
     generation_log_probs: List[float]
+    debug_vllm_prefill_generation_log_probs: NotRequired[List[float]]
+    debug_vllm_prefill_generation_logprob_count: NotRequired[int]
+    debug_vllm_prefill_generation_logprob_error_mean: NotRequired[float]
+    debug_vllm_prefill_generation_logprob_error_max: NotRequired[float]
+    debug_vllm_prefill_generation_logprob_status: NotRequired[str]
+    debug_vllm_decode_generation_log_probs: NotRequired[List[float]]
+    debug_vllm_generation_logprob_source: NotRequired[str]
 
 
 ########################################

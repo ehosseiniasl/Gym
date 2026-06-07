@@ -83,6 +83,58 @@ def _vllm_token_id_source() -> str:
     return os.environ.get("NEMO_GYM_VLLM_TOKEN_ID_SOURCE", "native").strip().lower()
 
 
+def _logprob_value(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get("logprob")
+    else:
+        value = getattr(value, "logprob", None)
+    if value is None:
+        return None
+    return float(value)
+
+
+def _prompt_logprob_for_token(entry: Any, token_id: int) -> Optional[float]:
+    if not isinstance(entry, dict) or not entry:
+        return None
+
+    for key in (token_id, str(token_id), f"token_id:{token_id}"):
+        if key in entry:
+            return _logprob_value(entry[key])
+
+    for key, value in entry.items():
+        try:
+            if int(str(key).removeprefix("token_id:")) == token_id:
+                return _logprob_value(value)
+        except ValueError:
+            pass
+
+    if len(entry) == 1:
+        return _logprob_value(next(iter(entry.values())))
+    return None
+
+
+def _extract_prompt_logprobs_for_tokens(
+    prompt_logprobs: Any,
+    token_ids: List[int],
+    start_idx: int,
+) -> Tuple[List[float], str]:
+    if not isinstance(prompt_logprobs, list):
+        return [], "missing_prompt_logprobs"
+    end_idx = start_idx + len(token_ids)
+    if len(prompt_logprobs) < end_idx:
+        return [], f"prompt_logprobs_short:{len(prompt_logprobs)}<{end_idx}"
+
+    values: List[float] = []
+    for rel_idx, token_id in enumerate(token_ids):
+        value = _prompt_logprob_for_token(prompt_logprobs[start_idx + rel_idx], token_id)
+        if value is None:
+            return values, f"missing_token_logprob_at:{rel_idx}"
+        values.append(value)
+    return values, "ok"
+
+
 class VLLMModelConfig(BaseResponsesAPIModelConfig):
     base_url: Union[str, List[str]]
     api_key: str
@@ -582,6 +634,88 @@ class VLLMModel(SimpleResponsesAPIModel):
             elif prompt_token_ids is None:
                 prompt_token_ids = await self._get_prompt_token_ids(client, body_dict)
 
+            debug_prefill_logprob_info: Dict[str, Any] = {}
+            prefill_log_probs_for_generation: Optional[List[float]] = None
+            refit_generation_logprobs = _env_flag("NEMO_GYM_VLLM_REFIT_GENERATION_LOGPROBS", default=False)
+            debug_prefill_logprobs = _env_flag("NEMO_GYM_VLLM_DEBUG_PREFILL_LOGPROBS", default=False)
+            if debug_prefill_logprobs or refit_generation_logprobs:
+                debug_status = "skipped_empty_generation"
+                if prompt_token_ids and generation_token_ids:
+                    sequence_token_ids = prompt_token_ids + generation_token_ids
+                    max_context = vllm_max_model_len or max_input_tokens
+                    if max_context is not None and len(sequence_token_ids) >= int(max_context):
+                        debug_status = (
+                            f"skipped_context_full:{len(sequence_token_ids)}>={int(max_context)}"
+                        )
+                    else:
+                        rescore_body_dict = deepcopy(body_dict)
+                        rescore_body_dict["required_prompt_token_ids"] = sequence_token_ids
+                        rescore_body_dict["prompt_logprobs"] = 0
+                        rescore_body_dict["max_tokens"] = 1
+                        rescore_body_dict.pop("max_completion_tokens", None)
+                        rescore_body_dict["logprobs"] = False
+                        rescore_body_dict["top_logprobs"] = 0
+                        rescore_body_dict["return_token_ids"] = False
+                        try:
+                            rescore_dict = await client.create_chat_completion(
+                                **rescore_body_dict
+                            )
+                            prefill_log_probs, debug_status = (
+                                _extract_prompt_logprobs_for_tokens(
+                                    rescore_dict.get("prompt_logprobs"),
+                                    generation_token_ids,
+                                    start_idx=len(prompt_token_ids),
+                                )
+                            )
+                            if debug_status == "ok":
+                                prefill_log_probs_for_generation = prefill_log_probs
+                                diffs = [
+                                    abs(float(decode_lp) - float(prefill_lp))
+                                    for decode_lp, prefill_lp in zip(
+                                        generation_log_probs, prefill_log_probs
+                                    )
+                                ]
+                                debug_prefill_logprob_info.update(
+                                    {
+                                        "debug_vllm_prefill_generation_log_probs": prefill_log_probs,
+                                        "debug_vllm_prefill_generation_logprob_count": len(prefill_log_probs),
+                                        "debug_vllm_prefill_generation_logprob_error_mean": sum(diffs) / len(diffs)
+                                        if diffs
+                                        else 0.0,
+                                        "debug_vllm_prefill_generation_logprob_error_max": max(diffs)
+                                        if diffs
+                                        else 0.0,
+                                    }
+                                )
+                        except Exception as exc:
+                            debug_status = f"error:{type(exc).__name__}"
+                            LOGGER.warning("vLLM prefill-logprob diagnostic failed", exc_info=True)
+                debug_prefill_logprob_info[
+                    "debug_vllm_prefill_generation_logprob_status"
+                ] = debug_status
+
+            if refit_generation_logprobs:
+                refit_strict = _env_flag("NEMO_GYM_VLLM_REFIT_GENERATION_LOGPROBS_STRICT", default=True)
+                if not generation_log_probs:
+                    debug_prefill_logprob_info["debug_vllm_generation_logprob_source"] = "decode_empty_generation"
+                elif (
+                    prefill_log_probs_for_generation is not None
+                    and len(prefill_log_probs_for_generation) == len(generation_log_probs)
+                ):
+                    debug_prefill_logprob_info[
+                        "debug_vllm_decode_generation_log_probs"
+                    ] = generation_log_probs
+                    generation_log_probs = [float(lp) for lp in prefill_log_probs_for_generation]
+                    debug_prefill_logprob_info["debug_vllm_generation_logprob_source"] = "prefill_refit"
+                else:
+                    source = f"decode_refit_unavailable:{debug_prefill_logprob_info.get('debug_vllm_prefill_generation_logprob_status', 'unknown')}"
+                    debug_prefill_logprob_info["debug_vllm_generation_logprob_source"] = source
+                    if refit_strict:
+                        raise RuntimeError(
+                            "NEMO_GYM_VLLM_REFIT_GENERATION_LOGPROBS=1 but vLLM "
+                            f"prefill/rescore logprobs were unavailable: {source}"
+                        )
+
             message_dict = choice_dict["message"]
             message_dict.update(
                 dict(
@@ -602,6 +736,7 @@ class VLLMModel(SimpleResponsesAPIModel):
                     if mismatch_positions
                     else [],
                     finish_reason=choice_dict.get("finish_reason"),
+                    **debug_prefill_logprob_info,
                 )
             )
 
@@ -1023,6 +1158,13 @@ class VLLMConverter(BaseModel):
                 "native_logprob_token_id_mismatch_count",
                 "native_logprob_token_id_first_mismatches",
                 "finish_reason",
+                "debug_vllm_prefill_generation_log_probs",
+                "debug_vllm_prefill_generation_logprob_count",
+                "debug_vllm_prefill_generation_logprob_error_mean",
+                "debug_vllm_prefill_generation_logprob_error_max",
+                "debug_vllm_prefill_generation_logprob_status",
+                "debug_vllm_decode_generation_log_probs",
+                "debug_vllm_generation_logprob_source",
             )
             response_output[-1] = train_cls(
                 **last_response_output_item.model_dump(),
